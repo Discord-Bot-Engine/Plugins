@@ -158,7 +158,3 @@
     --shadow-xl: var(--shadow-xl);
     --shadow-2xl: var(--shadow-2xl);
 }
-
-.svelte-flow__node-group {
-    background: oklch(0.7227 0.1920 149.5793 / 0.1)!important;
-}
