@@ -1,0 +1,102 @@
+name: Generate Docs from PR
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main  # O 'master', la rama donde se aceptan los cambios
+
+jobs:
+  create-and-push-docs:
+    # Solo se ejecuta si el PR fue "merged" (aceptado), no si fue cerrado sin aceptar
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Identify Changed Files and Generate MD
+        env:
+          # Usamos el token de GitHub por defecto para leer el PR actual
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # 1. Obtener la lista de archivos .js modificados en este PR usando CLI de GitHub
+          files=$(gh pr diff $PR_NUMBER --name-only | grep '\.js$')
+          
+          if [ -z "$files" ]; then
+            echo "No .js files found in this PR."
+            exit 0
+          fi
+
+          # 2. Script de Python embebido para procesar nombres y crear archivos
+          python3 -c "
+          import os
+          import re
+
+          files_raw = '''$files'''
+          body = os.environ['PR_BODY']
+          
+          file_list = files_raw.strip().split('\n')
+
+          for file_path in file_list:
+              if not file_path: continue
+              
+              # Obtener solo el nombre (ej: actions/StoreMemberStupid.js -> StoreMemberStupid)
+              filename_ext = os.path.basename(file_path)
+              name_only = os.path.splitext(filename_ext)[0]
+
+              # Convertir PascalCase a kebab-case
+              # Inserta un guion antes de cualquier mayúscula que no esté al principio
+              kebab_name = re.sub(r'(?<!^)(?=[A-Z])', '-', name_only).lower()
+              
+              md_filename = f'{kebab_name}.md'
+              
+              # Crear el archivo localmente
+              with open(md_filename, 'w', encoding='utf-8') as f:
+                  f.write(body if body else 'No description provided.')
+              
+              print(f'Generated: {md_filename} from {name_only}')
+          "
+
+      - name: Push to Docs Repository
+        # Usamos una acción de terceros fiable o git manual. Git manual es más seguro para entenderlo.
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.DOCS_PAT }} # El secreto que creaste
+          DOCS_REPO: 'Discord-Bot-Engine/Docs'      # EL REPO DE DESTINO
+          TARGET_DIR: 'actions'                     # CARPETA DESTINO
+        run: |
+          # Configurar Git
+          git config --global user.email "bot@action.github"
+          git config --global user.name "Docs Bot"
+
+          # Clonar el repo de Docs en una carpeta temporal
+          git clone https://$API_TOKEN_GITHUB@github.com/$DOCS_REPO.git docs_temp
+
+          # Movernos a la carpeta
+          cd docs_temp
+          
+          # Ir a la carpeta destino (o crearla si no existe)
+          mkdir -p $TARGET_DIR
+          
+          # Copiar los archivos .md generados en el paso anterior (están en la raíz del runner)
+          # '..' referencia al directorio anterior donde se generaron los .md
+          mv ../*.md $TARGET_DIR/ 2>/dev/null || true
+
+          # Comprobar si hay cambios
+          if [ -z "$(git status --porcelain)" ]; then 
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          # Commit y Push
+          git add .
+          git commit -m "Docs: Auto-generate from PR #${{ github.event.pull_request.number }}"
+          git push origin main
